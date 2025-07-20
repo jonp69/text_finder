@@ -6,6 +6,7 @@ import threading
 import time
 from pathlib import Path
 from queue import Queue
+from datetime import datetime
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton,
@@ -13,8 +14,14 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QObject, QTimer
 
+# Debug logging function
+def debug_log(message):
+    """Print debug messages with timestamp"""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] DEBUG: {message}")
+    sys.stdout.flush()  # Ensure immediate output
+
 # ------------- Settings -------------
-SCAN_INTERVAL_SEC = 60 * 10  # 10 minutes
 MIN_FILE_SIZE = 256  # bytes
 RESULTS_FILE = "detected_text_files.json"
 PARSED_DIRS_FILE = "parsed_directories.json"
@@ -62,28 +69,40 @@ class SearchWorker(QObject):
         self.drives = drives
         self._abort = False
         self.last_save_time = time.time()
+        debug_log(f"SearchWorker initialized for drives: {drives}")
 
     def abort(self):
         self._abort = True
+        debug_log("SearchWorker abort requested")
 
     def scan(self):
+        debug_log("Starting scan operation")
         detected_files = []
         parsed_dirs = []
         completed_dirs_since_save = 0
+        total_files_processed = 0
         
         for drive in self.drives:
+            debug_log(f"Beginning scan of drive: {drive}")
+            drive_start_time = time.time()
+            
             for root, dirs, files in os.walk(drive):
                 if self._abort:
+                    debug_log("Scan aborted by user")
                     return
                 if is_system_path(root):
                     dirs[:] = []  # don't descend
+                    debug_log(f"Skipping system path: {root}")
                     continue
                 
                 self.update_progress.emit(root, len(parsed_dirs))
                 
                 # Process all files in current directory
+                files_in_dir = 0
                 for fname in files:
+                    total_files_processed += 1
                     if self._abort:
+                        debug_log("Scan aborted during file processing")
                         return
                     fpath = os.path.join(root, fname)
                     try:
@@ -91,12 +110,17 @@ class SearchWorker(QObject):
                             continue
                         if is_text_file(fpath):
                             detected_files.append(fpath)
-                    except Exception:
+                            files_in_dir += 1
+                    except Exception as e:
+                        debug_log(f"Error processing file {fpath}: {e}")
                         continue
                 
                 # Directory is now fully processed
                 parsed_dirs.append(root)
                 completed_dirs_since_save += 1
+                
+                if files_in_dir > 0:
+                    debug_log(f"Found {files_in_dir} text files in {root}")
                 
                 # Progressive save based on batch size or time interval
                 current_time = time.time()
@@ -106,15 +130,21 @@ class SearchWorker(QObject):
                 )
                 
                 if should_save:
+                    debug_log(f"Triggering progressive save - {len(detected_files)} files, {len(parsed_dirs)} dirs")
                     self.progressive_save.emit(detected_files.copy(), parsed_dirs.copy())
                     completed_dirs_since_save = 0
                     self.last_save_time = current_time
+            
+            drive_duration = time.time() - drive_start_time
+            debug_log(f"Completed drive {drive} in {drive_duration:.1f}s")
                     
+        debug_log(f"Scan completed - Total: {len(detected_files)} text files from {total_files_processed} files processed")
         self.finished.emit(detected_files, parsed_dirs)
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        debug_log("MainWindow initializing...")
         self.setWindowTitle("Drive Text Searcher")
         self.setMinimumSize(800, 500)
         self.setStyleSheet("""
@@ -131,8 +161,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self.search_thread = None
         self.worker = None
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.start_scan)
+        debug_log("MainWindow initialization complete")
 
     def _build_ui(self):
         central = QWidget()
@@ -144,13 +173,10 @@ class MainWindow(QMainWindow):
         self.refresh_drives_btn.clicked.connect(self.load_drives)
         self.start_btn = QPushButton("Start Scan")
         self.start_btn.clicked.connect(self.start_scan)
-        self.auto_check = QCheckBox("Auto-scan every 10 min")
-        self.auto_check.stateChanged.connect(self.toggle_timer)
         h1.addWidget(self.dir_label)
         h1.addWidget(self.dir_list)
         h1.addWidget(self.refresh_drives_btn)
         h1.addWidget(self.start_btn)
-        h1.addWidget(self.auto_check)
         vbox.addLayout(h1)
         self.progress = QProgressBar()
         self.progress.setMaximum(100)
@@ -164,11 +190,14 @@ class MainWindow(QMainWindow):
         self.load_drives()
 
     def load_drives(self):
+        debug_log("Loading available drives...")
         self.dir_list.clear()
         drives = self.get_all_drives()
+        debug_log(f"Found drives: {drives}")
         for d in drives:
             self.dir_list.addItem(d)
             self.dir_list.item(self.dir_list.count()-1).setSelected(True)
+        debug_log(f"Loaded {len(drives)} drives to UI")
 
     def get_all_drives(self):
         drives = []
@@ -183,13 +212,17 @@ class MainWindow(QMainWindow):
         return drives
 
     def start_scan(self):
+        debug_log("start_scan() called")
         if self.search_thread and self.search_thread.is_alive():
+            debug_log("Scan already running - skipping")
             self.status_lbl.setText("Scan already running.")
             return
         drives = [self.dir_list.item(i).text() for i in range(self.dir_list.count()) if self.dir_list.item(i).isSelected()]
         if not drives:
+            debug_log("No drives selected")
             self.status_lbl.setText("No drives selected.")
             return
+        debug_log(f"Starting scan for drives: {drives}")
         self.status_lbl.setText("Scanning...")
         self.progress.setValue(0)
         self.results_list.clear()
@@ -202,17 +235,20 @@ class MainWindow(QMainWindow):
             self.worker.scan()
         self.search_thread = threading.Thread(target=run, daemon=True)
         self.search_thread.start()
+        debug_log("Scan thread started")
 
     def update_progress(self, current_dir, n):
         self.status_lbl.setText(f"Scanning: {current_dir}")
         self.progress.setValue(min(100, n % 100))
 
     def on_scan_finished(self, detected_files, parsed_dirs):
+        debug_log(f"Scan finished - {len(detected_files)} files found, {len(parsed_dirs)} directories processed")
         self.status_lbl.setText(f"Scan done. Found {len(detected_files)} files.")
         self.progress.setValue(100)
         for f in detected_files:
             self.results_list.addItem(f)
         # Save results
+        debug_log(f"Saving final results to {RESULTS_FILE}")
         with open(RESULTS_FILE, 'w', encoding='utf-8') as jf:
             json.dump(detected_files, jf, indent=2)
         # Find "topmost" parsed dirs: only directories whose parent not in list
@@ -223,11 +259,14 @@ class MainWindow(QMainWindow):
             parent_in = any(str(d).startswith(str(other) + os.sep) for other in parsed_dirs if other != d)
             if not parent_in:
                 topmost.append(str(d))
+        debug_log(f"Saving {len(topmost)} topmost directories to {PARSED_DIRS_FILE}")
         with open(PARSED_DIRS_FILE, 'w', encoding='utf-8') as jf:
             json.dump(topmost, jf, indent=2)
+        debug_log("Final save complete")
 
     def on_progressive_save(self, detected_files, parsed_dirs):
         """Progressive save during scanning - saves current state to background files"""
+        debug_log(f"Progressive save triggered - {len(detected_files)} files, {len(parsed_dirs)} dirs")
         # Create progressive/backup filenames
         progressive_results_file = f"{RESULTS_FILE}.progress"
         progressive_dirs_file = f"{PARSED_DIRS_FILE}.progress"
@@ -236,7 +275,9 @@ class MainWindow(QMainWindow):
         try:
             with open(progressive_results_file, 'w', encoding='utf-8') as jf:
                 json.dump(detected_files, jf, indent=2)
+            debug_log(f"Saved progress files to {progressive_results_file}")
         except Exception as e:
+            debug_log(f"ERROR: Could not save progressive results: {e}")
             print(f"Warning: Could not save progressive results: {e}")
         
         # Find and save topmost directories for current state
@@ -250,24 +291,29 @@ class MainWindow(QMainWindow):
             
             with open(progressive_dirs_file, 'w', encoding='utf-8') as jf:
                 json.dump(topmost, jf, indent=2)
+            debug_log(f"Saved {len(topmost)} progress directories to {progressive_dirs_file}")
                 
             # Optional: Update status to show progressive save happened
             current_status = self.status_lbl.text()
             if "Scanning:" in current_status:
                 self.status_lbl.setText(f"{current_status} [Saved: {len(detected_files)} files, {len(topmost)} dirs]")
         except Exception as e:
+            debug_log(f"ERROR: Could not save progressive directories: {e}")
             print(f"Warning: Could not save progressive directories: {e}")
 
-    def toggle_timer(self, state):
-        if state:
-            self.timer.start(SCAN_INTERVAL_SEC * 1000)
-            self.status_lbl.setText("Auto-scan enabled.")
-        else:
-            self.timer.stop()
-            self.status_lbl.setText("Auto-scan disabled.")
-
 if __name__ == "__main__":
+    debug_log("=== Drive Text Searcher Starting ===")
+    debug_log(f"Python version: {sys.version}")
+    debug_log(f"Current working directory: {os.getcwd()}")
+    debug_log(f"Settings: MIN_FILE_SIZE={MIN_FILE_SIZE}, PROGRESSIVE_SAVE_BATCH_SIZE={PROGRESSIVE_SAVE_BATCH_SIZE}")
+    debug_log(f"Settings: PROGRESSIVE_SAVE_TIME_INTERVAL={PROGRESSIVE_SAVE_TIME_INTERVAL}s")
+    
     app = QApplication(sys.argv)
+    debug_log("QApplication created")
     win = MainWindow()
+    debug_log("MainWindow created")
     win.show()
-    sys.exit(app.exec())
+    debug_log("MainWindow shown - entering event loop")
+    result = app.exec()
+    debug_log(f"Application exiting with code: {result}")
+    sys.exit(result)
