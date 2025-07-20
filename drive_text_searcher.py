@@ -18,6 +18,8 @@ SCAN_INTERVAL_SEC = 60 * 10  # 10 minutes
 MIN_FILE_SIZE = 256  # bytes
 RESULTS_FILE = "detected_text_files.json"
 PARSED_DIRS_FILE = "parsed_directories.json"
+PROGRESSIVE_SAVE_BATCH_SIZE = 100  # Save every N completed directories
+PROGRESSIVE_SAVE_TIME_INTERVAL = 30  # Save every N seconds during scanning
 SYSTEM_DIRS = [
     os.environ.get('SystemRoot', r'C:\Windows'),
     r'C:\Program Files', r'C:\Program Files (x86)',
@@ -53,11 +55,13 @@ def is_system_path(path):
 class SearchWorker(QObject):
     update_progress = Signal(str, int)
     finished = Signal(list, list)  # detected_files, parsed_dirs
+    progressive_save = Signal(list, list)  # detected_files, parsed_dirs for progressive save
 
     def __init__(self, drives, parent=None):
         super().__init__(parent)
         self.drives = drives
         self._abort = False
+        self.last_save_time = time.time()
 
     def abort(self):
         self._abort = True
@@ -65,6 +69,8 @@ class SearchWorker(QObject):
     def scan(self):
         detected_files = []
         parsed_dirs = []
+        completed_dirs_since_save = 0
+        
         for drive in self.drives:
             for root, dirs, files in os.walk(drive):
                 if self._abort:
@@ -72,8 +78,10 @@ class SearchWorker(QObject):
                 if is_system_path(root):
                     dirs[:] = []  # don't descend
                     continue
+                
                 self.update_progress.emit(root, len(parsed_dirs))
-                is_dir_fully_searched = True
+                
+                # Process all files in current directory
                 for fname in files:
                     if self._abort:
                         return
@@ -85,7 +93,23 @@ class SearchWorker(QObject):
                             detected_files.append(fpath)
                     except Exception:
                         continue
+                
+                # Directory is now fully processed
                 parsed_dirs.append(root)
+                completed_dirs_since_save += 1
+                
+                # Progressive save based on batch size or time interval
+                current_time = time.time()
+                should_save = (
+                    completed_dirs_since_save >= PROGRESSIVE_SAVE_BATCH_SIZE or
+                    (current_time - self.last_save_time) >= PROGRESSIVE_SAVE_TIME_INTERVAL
+                )
+                
+                if should_save:
+                    self.progressive_save.emit(detected_files.copy(), parsed_dirs.copy())
+                    completed_dirs_since_save = 0
+                    self.last_save_time = current_time
+                    
         self.finished.emit(detected_files, parsed_dirs)
 
 class MainWindow(QMainWindow):
@@ -173,6 +197,7 @@ class MainWindow(QMainWindow):
         self.worker = SearchWorker(drives)
         self.worker.update_progress.connect(self.update_progress)
         self.worker.finished.connect(self.on_scan_finished)
+        self.worker.progressive_save.connect(self.on_progressive_save)
         def run():
             self.worker.scan()
         self.search_thread = threading.Thread(target=run, daemon=True)
@@ -200,6 +225,38 @@ class MainWindow(QMainWindow):
                 topmost.append(str(d))
         with open(PARSED_DIRS_FILE, 'w', encoding='utf-8') as jf:
             json.dump(topmost, jf, indent=2)
+
+    def on_progressive_save(self, detected_files, parsed_dirs):
+        """Progressive save during scanning - saves current state to background files"""
+        # Create progressive/backup filenames
+        progressive_results_file = f"{RESULTS_FILE}.progress"
+        progressive_dirs_file = f"{PARSED_DIRS_FILE}.progress"
+        
+        # Save current detected files
+        try:
+            with open(progressive_results_file, 'w', encoding='utf-8') as jf:
+                json.dump(detected_files, jf, indent=2)
+        except Exception as e:
+            print(f"Warning: Could not save progressive results: {e}")
+        
+        # Find and save topmost directories for current state
+        try:
+            parsed_paths = [Path(d) for d in parsed_dirs]
+            topmost = []
+            for d in parsed_paths:
+                parent_in = any(str(d).startswith(str(other) + os.sep) for other in parsed_paths if other != d)
+                if not parent_in:
+                    topmost.append(str(d))
+            
+            with open(progressive_dirs_file, 'w', encoding='utf-8') as jf:
+                json.dump(topmost, jf, indent=2)
+                
+            # Optional: Update status to show progressive save happened
+            current_status = self.status_lbl.text()
+            if "Scanning:" in current_status:
+                self.status_lbl.setText(f"{current_status} [Saved: {len(detected_files)} files, {len(topmost)} dirs]")
+        except Exception as e:
+            print(f"Warning: Could not save progressive directories: {e}")
 
     def toggle_timer(self, state):
         if state:
