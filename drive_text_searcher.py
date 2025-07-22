@@ -669,55 +669,48 @@ class MainWindow(QMainWindow):
     
     def _calculate_weighted_split(self, drive, total_files, all_drives):
         """Calculate weighted split of global cache for a specific drive using points system"""
-        import shutil
-        
+
         # Calculate points for each drive
         drive_points = {}
         os_drive_size = None
-        
+
         # First, find the OS drive and get its used space
         for d in all_drives:
             if 'C:' in d.upper():
                 try:
-                    total_space, used_space, free_space = shutil.disk_usage(d)
-                    os_drive_size = used_space
-                    drive_points[d] = 3.0  # OS drive gets 3 points
-                    debug_log(f"OS drive {d}: {used_space / (1024**3):.1f}GB used, gets 3.0 points")
+                    os_drive_size = shutil.disk_usage(d).used
+                    drive_points[d] = 3.0  # OS drive gets 3 points automatically
+                    debug_log(f"OS drive {d} found with used space: {os_drive_size}")
                 except Exception as e:
-                    debug_log(f"Error getting disk usage for OS drive {d}: {e}")
-                    drive_points[d] = 3.0  # Fallback to 3 points
-                    os_drive_size = 1024**3 * 100  # Assume 100GB as fallback
+                    debug_log(f"Error getting used space for OS drive {d}: {e}")
                 break
-        
+
         # If no OS drive found, treat first drive as OS drive
         if os_drive_size is None:
             os_drive_size = 1024**3 * 100  # 100GB fallback
             drive_points[all_drives[0]] = 3.0
             debug_log(f"No OS drive found, treating {all_drives[0]} as OS drive with 3.0 points")
-        
+
         # Calculate points for other drives based on their used space relative to OS drive
         for d in all_drives:
             if d not in drive_points:  # Skip OS drive (already processed)
                 try:
-                    total_space, used_space, free_space = shutil.disk_usage(d)
-                    # Points = (this_drive_used / os_drive_used) with partial points allowed
-                    points = used_space / os_drive_size if os_drive_size > 0 else 1.0
-                    drive_points[d] = points
-                    debug_log(f"Drive {d}: {used_space / (1024**3):.1f}GB used, gets {points:.2f} points")
+                    used_space = shutil.disk_usage(d).used
+                    drive_points[d] = used_space / os_drive_size  # Relative to OS drive
+                    debug_log(f"Drive {d} used space: {used_space}, points: {drive_points[d]:.2f}")
                 except Exception as e:
-                    debug_log(f"Error getting disk usage for drive {d}: {e}")
-                    drive_points[d] = 1.0  # Fallback to 1 point
-        
+                    debug_log(f"Error getting used space for drive {d}: {e}")
+
         # Calculate total points
         total_points = sum(drive_points.values())
-        
+
         # Calculate weight for the requested drive (percentage of total points)
         drive_weight = drive_points.get(drive, 1.0) / total_points if total_points > 0 else 1.0 / len(all_drives)
-        
+
         weighted_count = int(total_files * drive_weight)
-        
+
         debug_log(f"Points system: {drive} gets {drive_points.get(drive, 1.0):.2f}/{total_points:.2f} points = {drive_weight:.2f} weight = {weighted_count} files")
-        
+
         return weighted_count
     
     def _ask_user_per_drive_cache(self, drive, cached_count, cache_age):
@@ -1399,20 +1392,3 @@ class MainWindow(QMainWindow):
         except Exception as e:
             debug_log(f"ERROR: Could not save progressive directories: {e}")
             print(f"Warning: Could not save progressive directories: {e}")
-
-if __name__ == "__main__":
-    debug_log("=== Drive Text Searcher Starting ===")
-    debug_log(f"Python version: {sys.version}")
-    debug_log(f"Current working directory: {os.getcwd()}")
-    debug_log(f"Settings: MIN_FILE_SIZE={MIN_FILE_SIZE}, PROGRESSIVE_SAVE_BATCH_SIZE={PROGRESSIVE_SAVE_BATCH_SIZE}")
-    debug_log(f"Settings: PROGRESSIVE_SAVE_TIME_INTERVAL={PROGRESSIVE_SAVE_TIME_INTERVAL}s")
-    
-    app = QApplication(sys.argv)
-    debug_log("QApplication created")
-    win = MainWindow()
-    debug_log("MainWindow created")
-    win.show()
-    debug_log("MainWindow shown - entering event loop")
-    result = app.exec()
-    debug_log(f"Application exiting with code: {result}")
-    sys.exit(result)
