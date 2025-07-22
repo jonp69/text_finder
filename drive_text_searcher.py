@@ -16,12 +16,33 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QObject, QTimer, QThread
 
+# Global variables for log categories and flags
+LOG_SETTINGS = {
+    "console": {
+        "debug": True,
+        "progress": False,
+        "file": False
+    },
+    "file": {
+        "debug": True,
+        "progress": True,
+        "file": True
+    }
+}
+
+# Function to log messages based on category and flags
+def log_message(message, category="debug", to_console=True, to_file=True):
+    if to_console and LOG_SETTINGS["console"].get(category, False):
+        print(f"[{category.upper()}] {message}")
+    if to_file and LOG_SETTINGS["file"].get(category, False):
+        with open(f"{category}_log.txt", "a", encoding="utf-8") as log_file:
+            log_file.write(f"[{category.upper()}] {message}\n")
+
 # Debug logging function
 def debug_log(message):
     """Print debug messages with timestamp"""
     timestamp = datetime.now().strftime("%H:%M:%S")
-    print(f"[{timestamp}] DEBUG: {message}")
-    sys.stdout.flush()  # Ensure immediate output
+    log_message(f"{timestamp} DEBUG: {message}", category="debug")
 
 # ------------- Settings -------------
 MIN_FILE_SIZE = 256  # bytes
@@ -916,6 +937,7 @@ class MainWindow(QMainWindow):
         self.total_files_to_process = estimated_total
         self.overall_progress.setMaximum(estimated_total)
         
+        debug_log("Starting file counting worker thread")
         # Start file counting worker (will only count uncached drives if mixed_counts provided)
         if mixed_counts['needs_counting']:
             self.count_worker = FileCountWorker(drives, mixed_counts=mixed_counts)
@@ -923,7 +945,10 @@ class MainWindow(QMainWindow):
             self.count_worker.counting_finished.connect(self.on_counting_finished, Qt.ConnectionType.QueuedConnection)
             
             def count_run():
+                debug_log("File counting thread execution started")
                 self.count_worker.count_files()
+                debug_log("File counting thread execution finished")
+            
             self.count_thread = threading.Thread(target=count_run, daemon=True)
             self.count_thread.start()
             debug_log("File counting thread started for uncached drives")
@@ -931,7 +956,8 @@ class MainWindow(QMainWindow):
             debug_log("All drives cached - skipping file counting")
             # Set running count to current cached total
             self.running_file_count = mixed_counts['total_cached']
-        
+
+        debug_log("Starting search worker thread")
         # Start search worker immediately with estimated totals
         self.worker = SearchWorker(drives)
         self.worker.set_total_files(estimated_total)  # Set estimated total immediately
@@ -941,14 +967,17 @@ class MainWindow(QMainWindow):
         self.worker.drive_completed.connect(self.on_drive_completed, Qt.ConnectionType.QueuedConnection)
         self.worker.save_progress.connect(self.on_save_progress, Qt.ConnectionType.QueuedConnection)
         self.worker.save_countdown.connect(self.on_save_countdown, Qt.ConnectionType.QueuedConnection)
-        
+
         # Connect signals for progress communication between workers
         if self.count_worker:
             self.worker.request_updated_count.connect(self.count_worker.provide_current_estimate, Qt.ConnectionType.QueuedConnection)
             self.count_worker.updated_count_response.connect(self.on_updated_count_received, Qt.ConnectionType.QueuedConnection)
         
         def scan_run():
+            debug_log("Search thread execution started")
             self.worker.scan()
+            debug_log("Search thread execution finished")
+        
         self.search_thread = threading.Thread(target=scan_run, daemon=True)
         self.search_thread.start()
         debug_log("Text detection scan thread started")
@@ -1388,7 +1417,47 @@ class MainWindow(QMainWindow):
             # Optional: Update status to show progressive save happened
             current_status = self.status_lbl.text()
             if "Scanning:" in current_status:
-                self.status_lbl.setText(f"{current_status} [Auto-saved]")
+                self.status_lbl.setText(f"{current_status} [Saved: {len(detected_files)} files, {len(topmost)} dirs]")
         except Exception as e:
             debug_log(f"ERROR: Could not save progressive directories: {e}")
             print(f"Warning: Could not save progressive directories: {e}")
+
+# Parse flags passed to the script
+def parse_flags(flags):
+    for flag in flags:
+        if flag.startswith("--disable-console-progress"):
+            toggle_log("progress", "console", False)
+        elif flag.startswith("--enable-console-progress"):
+            toggle_log("progress", "console", True)
+        elif flag.startswith("--disable-file-debug"):
+            toggle_log("debug", "file", False)
+        elif flag.startswith("--enable-file-debug"):
+            toggle_log("debug", "file", True)
+
+# Toggle log settings
+def toggle_log(category, output_type, enabled):
+    if category in LOG_SETTINGS[output_type]:
+        LOG_SETTINGS[output_type][category] = enabled
+        debug_log(f"Log setting updated: {output_type} {category} set to {enabled}")
+    else:
+        debug_log(f"Invalid log category or output type: {output_type} {category}")
+
+if __name__ == "__main__":
+    import sys
+    parse_flags(sys.argv[1:])
+
+    debug_log("=== Drive Text Searcher Starting ===")
+    debug_log(f"Python version: {sys.version}")
+    debug_log(f"Current working directory: {os.getcwd()}")
+    debug_log(f"Settings: MIN_FILE_SIZE={MIN_FILE_SIZE}, PROGRESSIVE_SAVE_BATCH_SIZE={PROGRESSIVE_SAVE_BATCH_SIZE}")
+    debug_log(f"Settings: PROGRESSIVE_SAVE_TIME_INTERVAL={PROGRESSIVE_SAVE_TIME_INTERVAL}s")
+
+    app = QApplication(sys.argv)
+    debug_log("QApplication created")
+    win = MainWindow()
+    debug_log("MainWindow created")
+    win.show()
+    debug_log("MainWindow shown - entering event loop")
+    result = app.exec()
+    debug_log(f"Application exiting with code: {result}")
+    sys.exit(result)
