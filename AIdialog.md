@@ -77,3 +77,17 @@
    - **Pending Task 2**: Review the save file structure for completeness and consistency.
    - **Priority Information**: Focus on testing the save/restore functionality and validating progress calculations.
    - **Next Action**: Conduct a thorough review and testing of the updated methods to ensure they meet the user's requirements.
+
+### Recent Updates
+
+- **Debugging Enhancements**: Added detailed debug logs for thread execution, file counting, and scanning operations. Logs now include timestamps and thread safety checks.
+
+- **File Estimate Logic**: Introduced proportional fallback logic for file estimates. Added global constants `OS_DRIVE_FALLBACK_COUNT` and `BASE_DRIVE_FALLBACK_COUNT` for default estimates.
+
+- **Field Renaming**: Renamed `drive_max_files` to `drive_file_estimates` for clarity. Added `drive_estimate_source` to track whether values are placeholders or results of previous counting.
+
+- **Save/Restore Improvements**: Enhanced `save_drive_tracking_state` and `load_drive_tracking_state` methods to include `drive_estimate_source`. Updated `resume_scan` to handle mixed per-drive cached counts and fallback estimates.
+
+- **UI Updates**: Updated progress bar formats to reflect estimated and actual file counts. Added status messages for progressive saves and scan completion.
+
+- **Threading Enhancements**: Improved threading logic for `count_worker` and `search_worker`. Added debug logs for thread initialization and execution.

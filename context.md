@@ -40,13 +40,33 @@ The workspace contains the following files:
 - **Dependencies**:
   - Added imports for `string` and `shutil` modules.
 
-### Summary of Recent Commands
+### Additional Updates
 
-- Updated methods like `update_progress`, `on_progressive_save`, and `resume_scan`.
+#### Drive Tracking Enhancements
 
-- Added new methods for saving and restoring drive state.
+- Renamed `drive_max_files` to `drive_file_estimates` for clarity.
 
-- Ensured proper imports for required modules.
+- Added `drive_estimate_source` to track whether the value is a placeholder or a result of previous counting.
+
+#### Fallback Logic Updates
+
+- Replaced magic numbers (`200000` and `50000`) with global constants `OS_DRIVE_FALLBACK_COUNT` and `BASE_DRIVE_FALLBACK_COUNT`.
+
+- Updated fallback logic to calculate proportional estimates based on the OS drive's used space, falling back to `BASE_DRIVE_FALLBACK_COUNT` only if the calculation fails.
+
+#### Debugging and Tracing
+
+- Added `[TRACE]` logs to key methods for better visibility into the application's execution flow.
+
+- Enhanced logging to separate categories (`debug`, `progress`, `file`) with configurable settings for console and file outputs.
+
+#### Progressive Save Improvements
+
+- Enhanced progressive save logic to include saving the `drive_tracking_state.json` file during auto-saves.
+
+#### User Interaction
+
+- Improved user prompts for handling old cached counts and weighted estimates.
 
 ## Pending Tasks
 

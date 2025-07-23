@@ -44,6 +44,13 @@ def debug_log(message):
     timestamp = datetime.now().strftime("%H:%M:%S")
     log_message(f"{timestamp} DEBUG: {message}", category="debug")
 
+# Add a global flag for enabling/disabling trace logs
+ENABLE_TRACE_LOGS = True
+
+def trace_log(message):
+    if ENABLE_TRACE_LOGS:
+        debug_log(f"[TRACE] {message}")
+
 # ------------- Settings -------------
 MIN_FILE_SIZE = 256  # bytes
 RESULTS_FILE = "detected_text_files.json"
@@ -57,6 +64,10 @@ SYSTEM_DIRS = [
     r'C:\$Recycle.Bin', r'C:\Users\All Users', r'C:\ProgramData'
 ]
 TEXT_SAMPLE_SIZE = 2048  # bytes to sample per file for detection
+
+# Define global constants for fallback counts
+OS_DRIVE_FALLBACK_COUNT = 200000
+BASE_DRIVE_FALLBACK_COUNT = 50000
 
 def is_text_file(filepath):
     """Detect if a file is likely text by sampling its start."""
@@ -252,7 +263,6 @@ class SearchWorker(QObject):
                 'detected_files': [],
                 'parsed_dirs': []
             }
-        
         debug_log(f"Starting with {len(detected_files)} existing files, {len(already_scanned)} already scanned dirs")
         
         for drive in self.drives:
@@ -357,6 +367,7 @@ class SearchWorker(QObject):
 
 class MainWindow(QMainWindow):
     def __init__(self):
+        trace_log("MainWindow.__init__ called")
         super().__init__()
         debug_log("MainWindow initializing...")
         self.setWindowTitle("Drive Text Searcher")
@@ -385,12 +396,15 @@ class MainWindow(QMainWindow):
         # Per-drive tracking dictionaries
         self.drive_files_processed = {}  # Track files processed per drive: {drive: count}
         self.drive_start_counts = {}     # Track where each drive started: {drive: overall_count}
-        self.drive_max_files = {}        # Track expected maximum files per drive: {drive: max_count}
+        self.drive_file_estimates = {}  # Renamed from drive_max_files
+        self.drive_estimate_source = {}  # New field to track estimate source
         self.drive_status = {}          # Track drive scanning status: {drive: 'scanning'|'completed'}
         
         debug_log("MainWindow initialization complete")
+        trace_log("MainWindow.__init__ completed")
 
     def _build_ui(self):
+        trace_log("MainWindow._build_ui called")
         central = QWidget()
         vbox = QVBoxLayout()
         h1 = QHBoxLayout()
@@ -455,8 +469,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self.load_drives()
         self.check_for_resume_files()
+        trace_log("MainWindow._build_ui completed")
 
     def check_for_resume_files(self):
+        trace_log("MainWindow.check_for_resume_files called")
         """Check if progress files exist and enable resume button if they do"""
         # Check for per-drive progress files
         drives = self.get_all_drives()
@@ -486,8 +502,10 @@ class MainWindow(QMainWindow):
         else:
             debug_log("No progress files found")
             self.resume_btn.setEnabled(False)
+        trace_log("MainWindow.check_for_resume_files completed")
 
     def load_drives(self):
+        trace_log("MainWindow.load_drives called")
         debug_log("Loading available drives...")
         self.dir_list.clear()
         drives = self.get_all_drives()
@@ -496,6 +514,7 @@ class MainWindow(QMainWindow):
             self.dir_list.addItem(d)
             self.dir_list.item(self.dir_list.count()-1).setSelected(True)
         debug_log(f"Loaded {len(drives)} drives to UI")
+        trace_log("MainWindow.load_drives completed")
 
     def select_all_drives(self):
         """Select all drives in the list"""
@@ -573,11 +592,11 @@ class MainWindow(QMainWindow):
             'estimated_uncached': 0,
             'needs_counting': False
         }
-        
+
         # First check if we have a global cache to split if no per-drive caches exist
         global_cache_to_split = None
         has_any_per_drive_cache = False
-        
+
         # Quick check for any existing per-drive caches
         for drive in drives:
             drive_safe = drive.replace(':', '').replace('\\', '')
@@ -585,7 +604,7 @@ class MainWindow(QMainWindow):
             if os.path.exists(drive_cache_file):
                 has_any_per_drive_cache = True
                 break
-        
+
         # If no per-drive caches exist, check for global cache to split
         if not has_any_per_drive_cache:
             try:
@@ -604,12 +623,12 @@ class MainWindow(QMainWindow):
                             debug_log(f"Found global cache to split: {cached_count} files, age: {cache_age/3600:.1f}h")
             except Exception as e:
                 debug_log(f"Error checking global cache: {e}")
-        
+
         # Process each drive
         for drive in drives:
             drive_safe = drive.replace(':', '').replace('\\', '')
             drive_cache_file = f"file_count_cache_{drive_safe}.json"
-            
+
             try:
                 if os.path.exists(drive_cache_file):
                     with open(drive_cache_file, 'r', encoding='utf-8') as f:
@@ -673,19 +692,19 @@ class MainWindow(QMainWindow):
                 debug_log(f"Error loading cache for drive {drive}: {e}")
                 # Treat as uncached if error
                 mixed_counts['uncached_drives'].append(drive)
-                estimate = 200000 if 'C:' in drive.upper() else 50000
+                estimate = OS_DRIVE_FALLBACK_COUNT if 'C:' in drive.upper() else BASE_DRIVE_FALLBACK_COUNT
                 mixed_counts['estimated_uncached'] += estimate
-        
+
         # Determine if counting is needed
         if not mixed_counts['needs_counting']:
             mixed_counts['needs_counting'] = len(mixed_counts['uncached_drives']) > 0
-            
+
         total_initial = mixed_counts['total_cached'] + mixed_counts['estimated_uncached']
-        
+
         debug_log(f"Mixed counts summary: {len(mixed_counts['cached_drives'])} cached drives ({mixed_counts['total_cached']} files), "
                  f"{len(mixed_counts['uncached_drives'])} uncached drives (~{mixed_counts['estimated_uncached']} estimated), "
                  f"total initial: {total_initial}")
-        
+
         return mixed_counts
     
     def _calculate_weighted_split(self, drive, total_files, all_drives):
@@ -792,14 +811,16 @@ class MainWindow(QMainWindow):
     def _initialize_drive_tracking(self, drives):
         """Initialize per-drive tracking dictionaries for the selected drives"""
         self.drive_files_processed.clear()
-        self.drive_start_counts.clear() 
-        self.drive_max_files.clear()
+        self.drive_start_counts.clear()
+        self.drive_file_estimates.clear()  # Updated field name
+        self.drive_estimate_source.clear()  # Initialize new field
         self.drive_status.clear()
         
         for drive in drives:
             self.drive_files_processed[drive] = 0
             self.drive_start_counts[drive] = 0  # Will be set when drive actually starts
-            self.drive_max_files[drive] = 0     # Will be set from cache or estimates
+            self.drive_file_estimates[drive] = 0  # Will be set from cache or estimates
+            self.drive_estimate_source[drive] = "placeholder"  # Default to placeholder
             self.drive_status[drive] = 'pending'
             
         debug_log(f"Initialized drive tracking for {len(drives)} drives: {drives}")
@@ -811,7 +832,7 @@ class MainWindow(QMainWindow):
             status = self.drive_status[drive]
             files_processed = self.drive_files_processed.get(drive, 0)
             start_count = self.drive_start_counts.get(drive, 0)
-            max_files = self.drive_max_files.get(drive, 0)
+            max_files = self.drive_file_estimates.get(drive, 0)
             summary.append(f"{drive}: {status}, {files_processed}/{max_files} files (started at {start_count})")
         return "; ".join(summary)
 
@@ -836,13 +857,15 @@ class MainWindow(QMainWindow):
             debug_log(f"ERROR: Could not cache file count for drive {drive}: {e}")
             
     def save_drive_tracking_state(self, drives):
+        trace_log("MainWindow.save_drive_tracking_state called")
         """Save complete drive tracking state to progress files"""
         try:
             drive_tracking_file = "drive_tracking_state.json"
             tracking_state = {
                 'drive_files_processed': self.drive_files_processed.copy(),
                 'drive_start_counts': self.drive_start_counts.copy(),
-                'drive_max_files': self.drive_max_files.copy(),
+                'drive_max_files': self.drive_file_estimates.copy(),  # Updated field name
+                'drive_estimate_source': self.drive_estimate_source.copy(),  # Save source
                 'drive_status': self.drive_status.copy(),
                 'timestamp': time.time(),
                 'drives': drives
@@ -852,8 +875,10 @@ class MainWindow(QMainWindow):
             debug_log(f"Saved drive tracking state for {len(drives)} drives")
         except Exception as e:
             debug_log(f"ERROR: Could not save drive tracking state: {e}")
+        trace_log("MainWindow.save_drive_tracking_state completed")
             
     def load_drive_tracking_state(self, drives):
+        trace_log("MainWindow.load_drive_tracking_state called")
         """Load drive tracking state from progress files"""
         try:
             drive_tracking_file = "drive_tracking_state.json"
@@ -866,7 +891,8 @@ class MainWindow(QMainWindow):
                     if drive in tracking_state.get('drive_files_processed', {}):
                         self.drive_files_processed[drive] = tracking_state['drive_files_processed'][drive]
                         self.drive_start_counts[drive] = tracking_state['drive_start_counts'].get(drive, 0)
-                        self.drive_max_files[drive] = tracking_state['drive_max_files'].get(drive, 0)
+                        self.drive_file_estimates[drive] = tracking_state['drive_max_files'].get(drive, 0)  # Updated field name
+                        self.drive_estimate_source[drive] = tracking_state.get('drive_estimate_source', {}).get(drive, "placeholder")  # Load source
                         self.drive_status[drive] = tracking_state['drive_status'].get(drive, 'pending')
                 
                 debug_log(f"Restored drive tracking state for drives: {list(self.drive_files_processed.keys())}")
@@ -876,6 +902,8 @@ class MainWindow(QMainWindow):
         return False
 
     def start_scan(self):
+        trace_log("MainWindow.start_scan called")
+        debug_log("[TRACE] MainWindow.start_scan called")
         debug_log("start_scan() called")
         if self.search_thread and self.search_thread.is_alive():
             debug_log("Scan already running - skipping")
@@ -902,13 +930,13 @@ class MainWindow(QMainWindow):
         # Set per-drive maximum values from cached or estimated counts
         for drive in drives:
             if drive in mixed_counts['cached_drives']:
-                self.drive_max_files[drive] = mixed_counts['cached_drives'][drive]
+                self.drive_file_estimates[drive] = mixed_counts['cached_drives'][drive]
             else:
                 # Use default estimates for uncached drives
-                estimate = 200000 if 'C:' in drive.upper() else 50000
-                self.drive_max_files[drive] = estimate
+                estimate = OS_DRIVE_FALLBACK_COUNT if 'C:' in drive.upper() else BASE_DRIVE_FALLBACK_COUNT
+                self.drive_file_estimates[drive] = estimate
                 
-        debug_log(f"Set per-drive max files: {self.drive_max_files}")
+        debug_log(f"Set per-drive max files: {self.drive_file_estimates}")
         
         # Determine initial total using mixed counts
         if mixed_counts['cached_drives'] or mixed_counts['estimated_uncached'] > 0:
@@ -927,9 +955,9 @@ class MainWindow(QMainWindow):
             estimated_total = 0
             for drive in drives:
                 if 'C:' in drive.upper():
-                    estimated_total += 200000  # System drive estimate
+                    estimated_total += OS_DRIVE_FALLBACK_COUNT  # System drive estimate
                 else:
-                    estimated_total += 50000   # Other drives estimate
+                    estimated_total += BASE_DRIVE_FALLBACK_COUNT   # Other drives estimate
             debug_log(f"Fallback to estimated total: {estimated_total} files")
             self.overall_progress.setFormat(f"%p% - %v of ~{estimated_total:,} files (estimating...)")
             mixed_counts['needs_counting'] = True  # Force counting in fallback case
@@ -940,12 +968,18 @@ class MainWindow(QMainWindow):
         debug_log("Starting file counting worker thread")
         # Start file counting worker (will only count uncached drives if mixed_counts provided)
         if mixed_counts['needs_counting']:
+            if not self.count_worker:
+                debug_log("ERROR: count_worker is not initialized.")
+                self.status_lbl.setText("Error: File counting worker not initialized.")
+                return
             self.count_worker = FileCountWorker(drives, mixed_counts=mixed_counts)
+            debug_log(f"count_worker initialized: {self.count_worker}")
             self.count_worker.drive_counted.connect(self.on_drive_counted, Qt.ConnectionType.QueuedConnection)
             self.count_worker.counting_finished.connect(self.on_counting_finished, Qt.ConnectionType.QueuedConnection)
-            
+
             def count_run():
                 debug_log("File counting thread execution started")
+                debug_log(f"count_worker in thread: {self.count_worker}")
                 self.count_worker.count_files()
                 debug_log("File counting thread execution finished")
             
@@ -958,9 +992,13 @@ class MainWindow(QMainWindow):
             self.running_file_count = mixed_counts['total_cached']
 
         debug_log("Starting search worker thread")
-        # Start search worker immediately with estimated totals
+        if not self.worker:
+            debug_log("ERROR: worker is not initialized.")
+            self.status_lbl.setText("Error: Search worker not initialized.")
+            return
         self.worker = SearchWorker(drives)
-        self.worker.set_total_files(estimated_total)  # Set estimated total immediately
+        debug_log(f"worker initialized: {self.worker}")
+        self.worker.set_total_files(estimated_total)
         self.worker.update_progress.connect(self.update_progress, Qt.ConnectionType.QueuedConnection)
         self.worker.finished.connect(self.on_scan_finished, Qt.ConnectionType.QueuedConnection)
         self.worker.progressive_save.connect(self.on_progressive_save, Qt.ConnectionType.QueuedConnection)
@@ -972,22 +1010,24 @@ class MainWindow(QMainWindow):
         if self.count_worker:
             self.worker.request_updated_count.connect(self.count_worker.provide_current_estimate, Qt.ConnectionType.QueuedConnection)
             self.count_worker.updated_count_response.connect(self.on_updated_count_received, Qt.ConnectionType.QueuedConnection)
-        
+
         def scan_run():
             debug_log("Search thread execution started")
+            debug_log(f"worker in thread: {self.worker}")
             self.worker.scan()
             debug_log("Search thread execution finished")
         
         self.search_thread = threading.Thread(target=scan_run, daemon=True)
         self.search_thread.start()
         debug_log("Text detection scan thread started")
+        trace_log("MainWindow.start_scan completed")
 
     def on_drive_counted(self, drive, file_count):
         """Called when file counting completes for a drive"""
         debug_log(f"Drive {drive} counting completed: {file_count} files")
         
         # Update the per-drive maximum with the actual counted value
-        self.drive_max_files[drive] = file_count
+        self.drive_file_estimates[drive] = file_count
         debug_log(f"Updated drive {drive} maximum to {file_count} files")
         
         # Update running total and save incrementally
@@ -1189,15 +1229,15 @@ class MainWindow(QMainWindow):
         
         # Set per-drive maximum values from cached or estimated counts (if not already restored)
         for drive in drives:
-            if self.drive_max_files.get(drive, 0) <= 0:  # Only set if not restored from tracking state
+            if self.drive_file_estimates.get(drive, 0) <= 0:  # Only set if not restored from tracking state
                 if drive in mixed_counts['cached_drives']:
-                    self.drive_max_files[drive] = mixed_counts['cached_drives'][drive]
+                    self.drive_file_estimates[drive] = mixed_counts['cached_drives'][drive]
                 else:
                     # Use default estimates for uncached drives
                     estimate = 200000 if 'C:' in drive.upper() else 50000
-                    self.drive_max_files[drive] = estimate
+                    self.drive_file_estimates[drive] = estimate
                     
-        debug_log(f"Resume: Set per-drive max files: {self.drive_max_files}")
+        debug_log(f"Resume: Set per-drive max files: {self.drive_file_estimates}")
         
         if mixed_counts['cached_drives']:
             # Use mixed counts approach
@@ -1242,6 +1282,7 @@ class MainWindow(QMainWindow):
         # Start file counting worker (for remaining/uncached files)
         if mixed_counts['needs_counting'] or not mixed_counts['cached_drives']:
             self.count_worker = FileCountWorker(drives, mixed_counts=mixed_counts if mixed_counts['cached_drives'] else None)
+            debug_log(f"count_worker initialized: {self.count_worker}")
             self.count_worker.drive_counted.connect(self.on_drive_counted, Qt.ConnectionType.QueuedConnection)
             self.count_worker.counting_finished.connect(self.on_counting_finished, Qt.ConnectionType.QueuedConnection)
             
@@ -1258,6 +1299,7 @@ class MainWindow(QMainWindow):
             'detected_files': all_detected_files,
             'parsed_dirs': all_parsed_dirs
         })
+        debug_log(f"worker initialized: {self.worker}")
         self.worker.set_total_files(estimated_total)  # Set estimated total immediately
         self.worker.update_progress.connect(self.update_progress, Qt.ConnectionType.QueuedConnection)
         self.worker.finished.connect(self.on_scan_finished, Qt.ConnectionType.QueuedConnection)
@@ -1310,14 +1352,14 @@ class MainWindow(QMainWindow):
         self.drive_files_processed[current_drive] = files_processed - self.drive_start_counts[current_drive]
         
         # Use actual per-drive maximum if available, otherwise fall back to estimates
-        drive_max_files = self.drive_max_files.get(current_drive, 0)
+        drive_max_files = self.drive_file_estimates.get(current_drive, 0)
         if drive_max_files <= 0:
             # Fallback to estimates if no maximum set
             if 'C:' in current_drive.upper():
                 drive_max_files = 200000  # System drive estimate
             else:
                 drive_max_files = 50000   # Other drives estimate
-            self.drive_max_files[current_drive] = drive_max_files
+            self.drive_file_estimates[current_drive] = drive_max_files
             debug_log(f"Using fallback estimate for {current_drive}: {drive_max_files}")
             
         # Calculate drive progress percentage (cap at 95% until drive completes)
